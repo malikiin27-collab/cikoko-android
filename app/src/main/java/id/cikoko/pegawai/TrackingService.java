@@ -1,19 +1,214 @@
 package id.cikoko.pegawai;
-import android.app.*;import android.os.*;import android.content.*;import android.content.pm.*;import android.location.Location;import com.google.android.gms.location.*;import org.json.*;import java.net.*;import java.io.*;import java.util.*;
+
+import android.Manifest;
+import android.app.*;
+import android.content.*;
+import android.content.pm.*;
+import android.location.Location;
+import android.os.*;
+import com.google.android.gms.location.*;
+import org.json.*;
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+import java.util.concurrent.*;
+
+/** GPS/SQLite state is serialized on worker; network never blocks location callbacks. */
 public class TrackingService extends Service {
- HandlerThread thread;Handler worker;FusedLocationProviderClient fused;PointQueue queue;volatile String token="";static volatile boolean running=false;volatile boolean foreground=false;volatile long sessionId=0;volatile long validUntil=0;String sessionToken="";long lastAcceptedElapsed=0;Location previous;LocationCallback callback;
- public void onCreate(){super.onCreate();((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(new NotificationChannel("tracking","Lokasi selama bertugas",NotificationManager.IMPORTANCE_LOW));promote();queue=new PointQueue(this);thread=new HandlerThread("CikokoUpload");thread.start();worker=new Handler(thread.getLooper());fused=LocationServices.getFusedLocationProviderClient(this);callback=new LocationCallback(){public void onLocationResult(LocationResult result){for(Location l:result.getLocations())capture(l);}};}
- Notification notification(String text){PendingIntent pi=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);return new Notification.Builder(this,"tracking").setSmallIcon(R.drawable.ic_location).setContentTitle("Cikoko · Tracking presisi").setContentText(text).setContentIntent(pi).setOngoing(true).build();}
- void promote(){if(Build.VERSION.SDK_INT>=29)startForeground(44,notification("Menyiapkan GPS"),ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);else startForeground(44,notification("Menyiapkan GPS"));foreground=true;}
- void notice(String s){if(!running||!foreground)return;try{((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(44,notification(s));}catch(Exception ignored){}}
- public int onStartCommand(Intent i,int flags,int id){if(i!=null&&"FLUSH".equals(i.getAction())&&running){clearSession();worker.removeCallbacks(tick);worker.post(tick);return START_NOT_STICKY;}if(!foreground)promote();if(checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){stopSelf();return START_NOT_STICKY;}String saved=TokenStore.read(this);if(saved.isEmpty()){stopSelf();return START_NOT_STICKY;}if(!saved.equals(token))sessionId=0;token=saved;SharedPreferences state=getSharedPreferences("tracking_state",0);sessionToken=state.getString("token_hash","");if(sessionToken.equals(tokenHash())&&state.getLong("until",0)>System.currentTimeMillis()){sessionId=state.getLong("session",0);validUntil=state.getLong("until",0);}if(!running){running=true;LocationRequest request=new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000).setMinUpdateIntervalMillis(3000).setMaxUpdateDelayMillis(5000).setWaitForAccurateLocation(true).build();try{fused.requestLocationUpdates(request,callback,Looper.getMainLooper()).addOnFailureListener(e->notice("GPS gagal. Periksa Lokasi akurat dan Google Play services."));}catch(SecurityException e){stopSelf();return START_NOT_STICKY;}worker.post(tick);}return START_STICKY;}
- void capture(Location l){if(!running||sessionId<=0||System.currentTimeMillis()>validUntil)return;long now=SystemClock.elapsedRealtimeNanos(),age=now-l.getElapsedRealtimeNanos();if(age<0||age>15000000000L||!l.hasAccuracy()||l.getAccuracy()>100){notice("GPS kurang akurat. Menunggu titik baru.");return;}long elapsed=l.getElapsedRealtimeNanos()/1000000L;boolean moving=(l.hasSpeed()&&l.getSpeed()>.5f)||(previous!=null&&l.distanceTo(previous)>Math.max(8,l.getAccuracy()));long interval=moving?5000:15000;if(lastAcceptedElapsed>0&&elapsed-lastAcceptedElapsed<interval)return;if(previous!=null){float delta=l.distanceTo(previous);double seconds=(l.getElapsedRealtimeNanos()-previous.getElapsedRealtimeNanos())/1e9;if(seconds>0&&delta>60*seconds+l.getAccuracy()+previous.getAccuracy()){notice("Lonjakan GPS disaring. Menunggu posisi stabil.");return;}}try{JSONObject p=new JSONObject().put("id",UUID.randomUUID().toString()).put("session_id",sessionId).put("lat",l.getLatitude()).put("lng",l.getLongitude()).put("acc",l.getAccuracy()).put("fix_epoch",l.getTime()/1000).put("speed",l.hasSpeed()?l.getSpeed():0);if(!queue.add(p)){notice("Antrean penuh. Sambungkan internet untuk mengirim GPS.");return;}previous=new Location(l);lastAcceptedElapsed=elapsed;}catch(Exception e){notice("Titik GPS belum tersimpan di perangkat.");}}
- JSONObject api(String endpoint,JSONObject body)throws Exception{HttpURLConnection c=(HttpURLConnection)new URL(AppConfig.BASE+"/api/mobile/"+endpoint+".php").openConnection();c.setConnectTimeout(6000);c.setReadTimeout(6000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Authorization","Bearer "+token);try{if(body!=null){c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");try(OutputStream out=c.getOutputStream()){out.write(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}}int code=c.getResponseCode();if(code==401){clearSession();notice("Login aplikasi berakhir. Buka aplikasi dan masuk kembali.");TokenStore.clear(this);stopSelf();throw new IOException("Login berakhir");}if(code!=200)throw new IOException(endpoint+" HTTP "+code);try(InputStream in=c.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);JSONObject j;try{j=new JSONObject(out.toString("UTF-8"));}catch(JSONException e){throw new IOException(endpoint+" bukan JSON; periksa server");}if(!j.optBoolean("ok"))throw new IOException("Respons server belum berhasil");return j;}}finally{c.disconnect();}}
- final Runnable tick=new Runnable(){public void run(){if(!running)return;try{JSONObject status=api("status",null);long uid=status.optLong("uid");if(uid<=0)throw new IOException("status tanpa UID; pasang patch server");queue.owner(String.valueOf(uid));JSONObject s=status.optJSONObject("session");long newId=status.optBoolean("active")&&s!=null?s.optLong("id"):0;if(newId!=sessionId){sessionId=newId;new Handler(Looper.getMainLooper()).post(()->{previous=null;lastAcceptedElapsed=0;});}if(newId>0){validUntil=System.currentTimeMillis()+15*60*1000L;getSharedPreferences("tracking_state",0).edit().putLong("session",newId).putLong("until",validUntil).putString("token_hash",tokenHash()).apply();}else clearSession();JSONArray batch=queue.batch();if(batch.length()>0){JSONObject result=api("points_batch",new JSONObject().put("points",batch));JSONArray ack=result.optJSONArray("ack");if(ack==null)throw new IOException("Server belum mengakui titik GPS");queue.ack(ack);JSONObject rejected=result.optJSONObject("rejected");int discarded=rejected==null?0:rejected.length();notice((discarded>0?discarded+" titik buruk ditolak · ":"")+"GPS terkirim · antrean "+queue.size()+" · "+new java.text.SimpleDateFormat("HH:mm:ss",Locale.US).format(new Date()));}else notice(sessionId>0?"GPS aktif · menunggu titik presisi":"Sesi kerja selesai");if(newId==0&&queue.size()==0){stopSelf();return;}}catch(Exception e){if(running)notice(errorLabel(e)+" · "+queue.size()+" titik menunggu");}if(running)worker.postDelayed(this,5000);}};
- String tokenHash(){try{byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(token.getBytes(java.nio.charset.StandardCharsets.UTF_8));return android.util.Base64.encodeToString(hash,android.util.Base64.NO_WRAP);}catch(Exception e){return "invalid";}}
- void clearSession(){sessionId=0;validUntil=0;getSharedPreferences("tracking_state",0).edit().clear().apply();}
- String errorLabel(Exception e){if(e instanceof java.net.SocketTimeoutException)return "Server lambat; mencoba lagi";if(e instanceof java.net.UnknownHostException)return "Internet/DNS tidak tersedia";if(e instanceof javax.net.ssl.SSLException)return "Sambungan HTTPS gagal";String message=e.getMessage();return message==null?"Pengiriman gagal; mencoba lagi":message.substring(0,Math.min(95,message.length()));}
- public void onTaskRemoved(Intent root){notice("GPS tetap aktif selama sesi kerja");super.onTaskRemoved(root);}
- public IBinder onBind(Intent i){return null;}
- public void onDestroy(){running=false;sessionId=0;if(worker!=null)worker.removeCallbacksAndMessages(null);if(fused!=null&&callback!=null)fused.removeLocationUpdates(callback);if(worker!=null&&queue!=null)worker.post(()->queue.close());if(thread!=null)thread.quitSafely();foreground=false;stopForeground(true);super.onDestroy();}
+    static volatile boolean running = false;
+    private HandlerThread thread;
+    private Handler worker;
+    private final ExecutorService network = Executors.newSingleThreadExecutor();
+    private FusedLocationProviderClient fused;
+    private LocationCallback callback;
+    private PointQueue queue;
+    private PowerManager.WakeLock uploadLock;
+    private String token = "";
+    private long sessionId, validUntil, lastAcceptedElapsed, generation;
+    private Location previous;
+    private boolean gpsRequested, inFlight, finishing;
+    private volatile boolean destroyed;
+
+    @Override public void onCreate() {
+        super.onCreate();
+        NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        nm.createNotificationChannel(new NotificationChannel("tracking", "Lokasi selama bertugas", NotificationManager.IMPORTANCE_LOW));
+        thread = new HandlerThread("CikokoGpsQueue"); thread.start();
+        worker = new Handler(thread.getLooper()); queue = new PointQueue(this);
+        fused = LocationServices.getFusedLocationProviderClient(this);
+        uploadLock = ((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Cikoko:GPSUpload");
+        uploadLock.setReferenceCounted(false);
+        callback = new LocationCallback() {
+            @Override public void onLocationResult(LocationResult result) {
+                for (Location location : result.getLocations()) capture(location);
+            }
+            @Override public void onLocationAvailability(LocationAvailability a) {
+                if (!a.isLocationAvailable()) notice("Sinyal GPS belum tersedia · periksa Lokasi HP");
+            }
+        };
+    }
+    private Notification notification(String message) {
+        PendingIntent open = PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+        return new Notification.Builder(this,"tracking").setSmallIcon(R.drawable.ic_location)
+            .setContentTitle("Cikoko · Tracking jam kerja aktif").setContentText(message)
+            .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).build();
+    }
+    private void notice(String message) {
+        if (!running || destroyed) return;
+        ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(44,notification(message));
+    }
+    @Override public int onStartCommand(Intent intent,int flags,int startId) {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
+            stopSelf(); return START_NOT_STICKY;
+        }
+        String saved=TokenStore.read(this);
+        if (saved.isEmpty()) { stopSelf(); return START_NOT_STICKY; }
+        try {
+            if (Build.VERSION.SDK_INT>=29) startForeground(44,notification("Memeriksa sesi kerja dan GPS"),ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+            else startForeground(44,notification("Memeriksa sesi kerja dan GPS"));
+        } catch (SecurityException e) { stopSelf(); return START_NOT_STICKY; }
+        running=true;
+        boolean flush=intent!=null && "FLUSH".equals(intent.getAction());
+        worker.post(()->{
+            if(destroyed)return;
+            if(!saved.equals(token)) {
+                generation++; token=saved; sessionId=0; previous=null; lastAcceptedElapsed=0;
+                SharedPreferences state=getSharedPreferences("tracking_state",0);
+                if(tokenHash().equals(state.getString("token_hash",""))) {
+                    validUntil=state.getLong("until",0);
+                    if(validUntil>System.currentTimeMillis()) sessionId=state.getLong("session",0);
+                }
+            }
+            if(flush) { finishing=true;generation++;clearSession();stopGps(); }
+            else { finishing=false; startGps(); }
+            worker.removeCallbacks(tick);worker.post(tick);
+        });
+        return flush?START_NOT_STICKY:START_STICKY;
+    }
+    private void startGps() {
+        if(gpsRequested || finishing || destroyed)return;
+        LocationRequest request=new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,TrackingPolicy.INTERVAL_MS)
+            .setMinUpdateIntervalMillis(TrackingPolicy.INTERVAL_MS).setMaxUpdateDelayMillis(0)
+            .setMaxUpdateAgeMillis(0).setMinUpdateDistanceMeters(0).setWaitForAccurateLocation(true).build();
+        try {
+            gpsRequested=true;
+            fused.requestLocationUpdates(request,callback,thread.getLooper()).addOnFailureListener(error->worker.post(()->{
+                gpsRequested=false;notice("GPS gagal dimulai · buka aplikasi dan periksa izin lokasi");
+            }));
+        }catch(SecurityException e){gpsRequested=false;notice("Izin lokasi dicabut · buka aplikasi");stopSelf();}
+    }
+    private void stopGps() {
+        gpsRequested=false;
+        if(fused!=null && callback!=null)fused.removeLocationUpdates(callback);
+    }
+    @SuppressWarnings("deprecation") private void capture(Location location) {
+        if(destroyed || finishing || sessionId<=0)return;
+        if(System.currentTimeMillis()>validUntil) {notice("Sesi belum terverifikasi lebih dari 12 jam · sambungkan internet");return;}
+        long elapsed=location.getElapsedRealtimeNanos()/1000000L;
+        long age=SystemClock.elapsedRealtime()-elapsed;
+        boolean mock=Build.VERSION.SDK_INT>=31?location.isMock():location.isFromMockProvider();
+        if(!location.hasAccuracy() || !TrackingPolicy.validFix(location.getLatitude(),location.getLongitude(),location.getAccuracy(),age,mock)) {
+            notice("GPS belum akurat atau titik tidak valid · menunggu lokasi baru");return;
+        }
+        if(!TrackingPolicy.due(elapsed,lastAcceptedElapsed))return;
+        if(previous!=null) {
+            double seconds=(location.getElapsedRealtimeNanos()-previous.getElapsedRealtimeNanos())/1e9;
+            if(seconds<=0 || location.distanceTo(previous)>60*seconds+location.getAccuracy()+previous.getAccuracy()) {
+                notice("Lonjakan GPS disaring · menunggu posisi stabil");return;
+            }
+        }
+        try {
+            float speed=location.hasSpeed()?location.getSpeed():0;
+            if(!Float.isFinite(speed)||speed<0||speed>100)return;
+            JSONObject point=new JSONObject().put("id",UUID.randomUUID().toString()).put("session_id",sessionId)
+                .put("lat",location.getLatitude()).put("lng",location.getLongitude()).put("acc",location.getAccuracy())
+                .put("fix_epoch",location.getTime()/1000).put("speed",speed);
+            if(!queue.add(point)) {notice("Antrean penuh · sambungkan internet");return;}
+            previous=new Location(location);lastAcceptedElapsed=elapsed;
+            sync(); // Fused callbacks also wake upload work while the screen is locked.
+        }catch(Exception e){notice("GPS belum tersimpan · periksa ruang penyimpanan");}
+    }
+    private final Runnable tick=new Runnable(){@Override public void run(){
+        if(destroyed)return;
+        if(!finishing && !gpsRequested)startGps();
+        sync();worker.postDelayed(this,TrackingPolicy.INTERVAL_MS);
+    }};
+    private void sync() {
+        if(inFlight || destroyed || token.isEmpty())return;
+        inFlight=true;
+        final long attempt=generation;final String credential=token;
+        uploadLock.acquire(30000); // bounded CPU lock only while status/upload is in flight
+        network.execute(()->{
+            try {
+                JSONObject status=api("status",null,credential);
+                worker.post(()->{
+                    if(!current(attempt)){finishAttempt();return;}
+                    try {
+                        long uid=status.optLong("uid");if(uid<=0)throw new IOException("Status server tanpa UID");
+                        queue.owner(String.valueOf(uid));
+                        JSONObject session=status.optJSONObject("session");
+                        long next=!finishing && status.optBoolean("active") && session!=null?session.optLong("id"):0;
+                        if(next!=sessionId){previous=null;lastAcceptedElapsed=0;}
+                        sessionId=next;
+                        if(next>0) {
+                            validUntil=System.currentTimeMillis()+TrackingPolicy.OFFLINE_LEASE_MS;
+                            getSharedPreferences("tracking_state",0).edit().putLong("session",next).putLong("until",validUntil).putString("token_hash",tokenHash()).apply();
+                        } else {clearSession();stopGps();finishing=true;}
+                        JSONArray batch=queue.batch();
+                        if(batch.length()==0){notice(next>0?"GPS aktif · target pembaruan 5 detik":"Sesi kerja selesai");finishAttempt();if(next==0)stopSelf();return;}
+                        network.execute(()->upload(batch,attempt,credential));
+                    }catch(Exception e){failed(e,attempt);}
+                });
+            }catch(Exception e){worker.post(()->failed(e,attempt));}
+        });
+    }
+    private void upload(JSONArray batch,long attempt,String credential) {
+        try {
+            JSONObject response=api("points_batch",new JSONObject().put("points",batch),credential);
+            worker.post(()->{
+                if(!current(attempt)){finishAttempt();return;}
+                try {
+                    JSONArray ack=response.optJSONArray("ack");if(ack==null)throw new IOException("Server belum mengakui GPS");
+                    queue.ack(ack);
+                    int rejected=response.optJSONObject("rejected")==null?0:response.optJSONObject("rejected").length();
+                    notice((rejected>0?rejected+" titik ditolak · ":"")+"GPS tersimpan · antrean "+queue.size());
+                    finishAttempt();
+                    if(finishing && queue.size()==0)stopSelf();
+                    else if(queue.size()>=100)sync();
+                }catch(Exception e){failed(e,attempt);}
+            });
+        }catch(Exception e){worker.post(()->failed(e,attempt));}
+    }
+    private boolean current(long attempt){return !destroyed && generation==attempt;}
+    private void finishAttempt(){inFlight=false;if(uploadLock.isHeld())uploadLock.release();}
+    private void failed(Exception error,long attempt) {
+        finishAttempt();if(!current(attempt))return;
+        if(error instanceof AuthFailure){clearSession();stopGps();TokenStore.clear(this);notice("Login berakhir · buka aplikasi dan masuk kembali");stopSelf();return;}
+        notice("Belum terkirim · "+queue.size()+" titik tersimpan · periksa internet/server");
+    }
+    private static final class AuthFailure extends IOException {}
+    private JSONObject api(String endpoint,JSONObject body,String credential)throws Exception {
+        HttpURLConnection connection=(HttpURLConnection)new URL(AppConfig.BASE+"/api/mobile/"+endpoint+".php").openConnection();
+        connection.setConnectTimeout(6000);connection.setReadTimeout(6000);connection.setInstanceFollowRedirects(false);
+        connection.setRequestProperty("Authorization","Bearer "+credential);
+        try {
+            if(body!=null){connection.setRequestMethod("POST");connection.setDoOutput(true);connection.setRequestProperty("Content-Type","application/json");try(OutputStream out=connection.getOutputStream()){out.write(body.toString().getBytes(StandardCharsets.UTF_8));}}
+            int code=connection.getResponseCode();if(code==401||code==403)throw new AuthFailure();if(code!=200)throw new IOException("HTTP "+code);
+            try(InputStream in=connection.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()) {
+                byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){out.write(buffer,0,n);if(out.size()>2000000)throw new IOException("Respons terlalu besar");}
+                JSONObject result=new JSONObject(out.toString("UTF-8"));if(!result.optBoolean("ok"))throw new IOException("Server menolak permintaan");return result;
+            }
+        }finally{connection.disconnect();}
+    }
+    private String tokenHash(){try{return android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8)),android.util.Base64.NO_WRAP);}catch(Exception e){throw new IllegalStateException(e);}}
+    private void clearSession(){sessionId=0;validUntil=0;getSharedPreferences("tracking_state",0).edit().clear().apply();}
+    @Override public void onTaskRemoved(Intent root){notice("Tracking sesi kerja tetap aktif · layar boleh dikunci");super.onTaskRemoved(root);}
+    @Override public IBinder onBind(Intent intent){return null;}
+    @Override public void onDestroy(){
+        destroyed=true;running=false;stopGps();worker.removeCallbacksAndMessages(null);
+        network.shutdownNow();if(uploadLock.isHeld())uploadLock.release();
+        worker.post(()->{queue.close();thread.quitSafely();});
+        stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
+    }
 }
