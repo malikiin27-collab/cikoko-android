@@ -24,7 +24,8 @@ function startWatch(){
  if(window.CikokoNative)return;
  if(!active||document.visibilityState!=='visible'||!navigator.geolocation||watchId!==null)return;
  watchId=navigator.geolocation.watchPosition(async pos=>{
-   lastPos=pos;emit('tracking-point',pointData(pos));
+   if(!Number.isFinite(pos.coords.accuracy)||pos.coords.accuracy<=0||pos.coords.accuracy>30||Date.now()-pos.timestamp>15000){emit('tracking-error',{message:'GPS belum akurat atau kedaluwarsa. Menunggu lokasi baru (±30 m atau lebih baik).'});return;}
+   lastPos=pos;
    if(!active||!navigator.onLine||sending||Date.now()-lastSent<5000)return;
    sending=true;
    try{const j=await api('point',pos);lastSent=Date.now();emit('tracking-point',pointData(pos,j.at||null));}
@@ -34,20 +35,21 @@ function startWatch(){
 }
 async function refreshStatus(force){
  if(statusPromise&&!force)return statusPromise;
- statusPromise=fetch(base+'/pegawai/tracking_api.php?action=status',{credentials:'same-origin',cache:'no-store'}).then(async r=>{let j;try{j=await r.json();}catch(e){throw new Error('Status jam kerja tidak dapat dibaca.');}if(!r.ok||!j.ok)throw new Error(j.message||'Status jam kerja tidak tersedia.');active=!!j.active;session=j.session||null;emit('tracking-status',{active:active,session:session});if(window.CikokoNative&&session)emit('tracking-point',{lat:Number(session.last_lat),lng:Number(session.last_lng),acc:Number(session.last_accuracy||0),at:session.last_seen_at,stored:true});if(active)startWatch();else{clearWatch();releaseWake();}return {active:active,session:session};}).catch(e=>{emit('tracking-error',{message:e.message});throw e;}).finally(()=>{statusPromise=null;});
+ statusPromise=fetch(base+'/pegawai/tracking_api.php?action=status',{credentials:'same-origin',cache:'no-store'}).then(async r=>{let j;try{j=await r.json();}catch(e){throw new Error('Status jam kerja tidak dapat dibaca.');}if(!r.ok||!j.ok)throw new Error(j.message||'Status jam kerja tidak tersedia.');active=!!j.active;session=j.session||null;emit('tracking-status',{active:active,session:session});if(window.CikokoNative&&session)emit('tracking-point',{lat:Number(session.last_lat),lng:Number(session.last_lng),acc:Number(session.last_accuracy||0),at:session.gps_fix_at||session.last_seen_at,stored:true});if(active)startWatch();else{clearWatch();releaseWake();}return {active:active,session:session};}).catch(e=>{emit('tracking-error',{message:e.message});throw e;}).finally(()=>{statusPromise=null;});
  return statusPromise;
 }
 async function start(photoFile,stampToken){
  if(!photoFile)throw new Error('Foto mulai bertugas wajib dipilih atau diambil terlebih dahulu.');
  if(!stampToken)throw new Error('Foto mulai bertugas/check-out belum diberi cap. Ambil foto kembali.');
  const pos=await geoOnce();lastPos=pos;
- if(Number(pos.coords.accuracy)>200)throw new Error('Akurasi GPS masih rendah (±'+Math.round(pos.coords.accuracy)+' m). Pindah ke area terbuka dan coba kembali.');
+ if((!Number.isFinite(pos.coords.accuracy)||pos.coords.accuracy<=0||pos.coords.accuracy>30))throw new Error('Akurasi GPS masih rendah (±'+Math.round(pos.coords.accuracy)+' m). Pindah ke area terbuka dan coba kembali.');
  const j=await api('start',pos,photoFile,stampToken);active=true;session={id:j.session_id,checkin_at:j.at||new Date().toLocaleString('id-ID')};lastSent=Date.now();emit('tracking-status',{active:true,session:session});emit('tracking-point',pointData(pos,j.at||null));startWatch();await requestWake();return {data:j,position:pointData(pos)};
 }
 async function stop(photoFile,stampToken){
  if(!photoFile)throw new Error('Foto selesai bertugas wajib dipilih atau diambil terlebih dahulu.');
  if(!stampToken)throw new Error('Foto mulai bertugas/check-out belum diberi cap. Ambil foto kembali.');
- let pos=lastPos;try{pos=await geoOnce();}catch(e){}
+ const pos=await geoOnce();
+ if(!Number.isFinite(pos.coords.accuracy)||pos.coords.accuracy<=0||pos.coords.accuracy>30)throw new Error('GPS selesai bertugas belum akurat. Tunggu lokasi ±30 meter atau lebih baik.');
  const j=await api('stop',pos,photoFile,stampToken);active=false;session=null;clearWatch();await releaseWake();emit('tracking-status',{active:false,session:null});return {data:j,position:pos?pointData(pos):null};
 }
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){clearWatch();releaseWake();return;}refreshStatus(true).catch(()=>{});});

@@ -12,7 +12,8 @@ import org.json.JSONObject;
 /** Status from the actual service in this process, not the web attendance session. */
 final class TrackingHealth {
     static volatile String message="Layanan GPS belum berjalan", provider="Belum dipilih";
-    static volatile long fixAt, sentAt, taskRemovedAt;
+    static volatile float accuracy;
+    static volatile long fixAt, sentAt, serverFixAt, taskRemovedAt;
     static JSONObject status(Context c) throws Exception {
         NotificationManager nm=(NotificationManager)c.getSystemService(Context.NOTIFICATION_SERVICE);
         NotificationChannel channel=nm.getNotificationChannel("tracking");
@@ -21,7 +22,7 @@ final class TrackingHealth {
         return new JSONObject().put("type","health").put("version",BuildConfig.VERSION_NAME)
             .put("device",Build.MANUFACTURER+" "+Build.MODEL).put("android",Build.VERSION.RELEASE)
             .put("running",TrackingService.running).put("message",message).put("provider",provider)
-            .put("fix_at",fixAt).put("sent_at",sentAt).put("task_removed_at",taskRemovedAt)
+            .put("accuracy",accuracy).put("fix_at",fixAt).put("sent_at",sentAt).put("server_fix_at",serverFixAt).put("task_removed_at",taskRemovedAt)
             .put("precise",c.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)
             .put("background",Build.VERSION.SDK_INT<29 || c.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)==PackageManager.PERMISSION_GRANTED)
             .put("notifications",nm.areNotificationsEnabled() && (channel==null||channel.getImportance()!=NotificationManager.IMPORTANCE_NONE))

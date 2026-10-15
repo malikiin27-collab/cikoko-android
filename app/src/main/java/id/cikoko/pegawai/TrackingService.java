@@ -29,7 +29,7 @@ public class TrackingService extends Service {
     private PowerManager.WakeLock uploadLock;
     private String token = "";
     private long sessionId, validUntil, lastAcceptedElapsed, generation;
-    private Location previous;
+    private Location previous, pendingFix;
     private boolean gpsRequested, inFlight, finishing;
     private volatile boolean destroyed;
 
@@ -134,12 +134,23 @@ public class TrackingService extends Service {
         long age=SystemClock.elapsedRealtime()-elapsed;
         boolean mock=Build.VERSION.SDK_INT>=31?location.isMock():location.isFromMockProvider();
         if(!location.hasAccuracy() || !TrackingPolicy.validFix(location.getLatitude(),location.getLongitude(),location.getAccuracy(),age,mock)) {
-            notice("GPS belum akurat atau titik tidak valid · menunggu lokasi baru");return;
+            notice("GPS belum akurat (perlu ±30 m atau lebih baik) · menunggu lokasi baru");return;
         }
+        TrackingHealth.accuracy=location.getAccuracy();
         if(!TrackingPolicy.due(elapsed,lastAcceptedElapsed))return;
+        boolean moving=location.hasSpeed() && location.hasSpeedAccuracy()
+            && location.getSpeed()-location.getSpeedAccuracyMetersPerSecond()>0.7f;
+        double gap=previous==null?Double.POSITIVE_INFINITY:(elapsed-previous.getElapsedRealtimeNanos()/1000000L)/1000.0;
+        boolean confirm=previous==null||gap>30||(!moving && location.distanceTo(previous)>Math.max(20,2*(location.getAccuracy()+previous.getAccuracy())));
+        if(confirm){
+            long pendingAge=pendingFix==null?0:elapsed-pendingFix.getElapsedRealtimeNanos()/1000000L;
+            boolean consistent=pendingFix!=null && TrackingPolicy.confirmed(pendingAge,location.distanceTo(pendingFix),location.getAccuracy(),pendingFix.getAccuracy(),moving?location.getSpeed():0);
+            if(!consistent){pendingFix=new Location(location);notice("Memastikan lokasi stabil · menunggu sampel GPS berikutnya");return;}
+        }
+        pendingFix=null;
         if(previous!=null) {
             double seconds=(location.getElapsedRealtimeNanos()-previous.getElapsedRealtimeNanos())/1e9;
-            if(seconds<=0 || location.distanceTo(previous)>60*seconds+location.getAccuracy()+previous.getAccuracy()) {
+            if(seconds<=0 || location.distanceTo(previous)>45*seconds+location.getAccuracy()+previous.getAccuracy()) {
                 notice("Lonjakan GPS disaring · menunggu posisi stabil");return;
             }
         }
@@ -175,14 +186,14 @@ public class TrackingService extends Service {
                         queue.owner(String.valueOf(uid));
                         JSONObject session=status.optJSONObject("session");
                         long next=!finishing && status.optBoolean("active") && session!=null?session.optLong("id"):0;
-                        if(next!=sessionId){previous=null;lastAcceptedElapsed=0;}
+                        if(next!=sessionId){previous=null;pendingFix=null;lastAcceptedElapsed=0;TrackingHealth.fixAt=0;TrackingHealth.sentAt=0;TrackingHealth.serverFixAt=0;}
                         sessionId=next;
                         if(next>0) {
                             validUntil=System.currentTimeMillis()+TrackingPolicy.OFFLINE_LEASE_MS;
                             getSharedPreferences("tracking_state",0).edit().putLong("session",next).putLong("until",validUntil).putString("token_hash",tokenHash()).apply();
                         } else {clearSession();stopGps();finishing=true;}
                         JSONArray batch=queue.batch();
-                        if(batch.length()==0){notice(next>0?"GPS aktif · target pembaruan 5 detik":"Sesi kerja selesai");finishAttempt();if(next==0)stopSelf();return;}
+                        if(batch.length()==0){notice(next>0?(System.currentTimeMillis()-TrackingHealth.fixAt<=20000?"GPS aktif · target pembaruan 5 detik":"Menunggu GPS akurat dan stabil · belum ada posisi baru"):"Sesi kerja selesai");finishAttempt();if(next==0)stopSelf();return;}
                         network.execute(()->upload(batch,attempt,credential));
                     }catch(Exception e){failed(e,attempt);}
                 });
@@ -197,9 +208,17 @@ public class TrackingService extends Service {
                 try {
                     JSONArray ack=response.optJSONArray("ack");if(ack==null)throw new IOException("Server belum mengakui GPS");
                     queue.ack(ack);
-                    if(ack.length()>0)TrackingHealth.sentAt=System.currentTimeMillis();
-                    int rejected=response.optJSONObject("rejected")==null?0:response.optJSONObject("rejected").length();
-                    notice((rejected>0?rejected+" titik ditolak · ":"")+"GPS tersimpan · antrean "+queue.size());
+                    JSONObject rejectedPoints=response.optJSONObject("rejected");
+                    java.util.HashSet<String> acknowledged=new java.util.HashSet<>();
+                    for(int i=0;i<ack.length();i++)acknowledged.add(ack.optString(i));
+                    long confirmedFix=0;
+                    for(int i=0;i<batch.length();i++){
+                        JSONObject item=batch.getJSONObject(i);String id=item.optString("id");
+                        if(acknowledged.contains(id) && (rejectedPoints==null||!rejectedPoints.has(id)))confirmedFix=Math.max(confirmedFix,item.optLong("fix_epoch")*1000L);
+                    }
+                    if(confirmedFix>0){TrackingHealth.sentAt=System.currentTimeMillis();TrackingHealth.serverFixAt=Math.max(TrackingHealth.serverFixAt,confirmedFix);}
+                    int rejected=rejectedPoints==null?0:rejectedPoints.length();
+                    notice((rejected>0?rejected+" titik ditolak server · ":"GPS diproses · ")+"antrean "+queue.size());
                     finishAttempt();
                     if(finishing && queue.size()==0)stopSelf();
                     else if(queue.size()>=100)sync();

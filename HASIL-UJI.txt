@@ -1,13 +1,73 @@
-Cikoko Android 2.2.0-uji / versionCode 22
+HASIL HARDCHECK CIKOKO 2.3.0-UJI
+Tanggal: 15 Oktober 2026
+
+Dasar pemeriksaan: website Cikoko terakhir yang tersedia, ditambah patch
+Android/web D14, sumber Android 2.2.0, APK unggahan 2.2.0-uji, dan screenshot.
+Tidak ada akses langsung ke database/hosting produksi atau HP pengguna.
+
+TEMUAN DAN PERBAIKAN
+1. MainActivity memaksa semua input image membuka kamera. Kini kamera hanya
+   dipanggil saat HTML meminta capture; Galeri memakai ACTION_OPEN_DOCUMENT.
+   MIME gambar dan pilihan banyak file diteruskan, pembatalan ditangani.
+2. APK menerima akurasi hingga 100 m; jalur web menerima hingga 200 m.
+   Keduanya sekarang mensyaratkan akurasi >0 dan <=30 m. Ini batas penyaringan,
+   bukan jaminan ketepatan 30 m di dunia nyata.
+3. Akuisisi lokasi awal, pemulihan setelah jeda dan lonjakan saat tidak ada
+   kecepatan gerak yang meyakinkan meminta sampel konfirmasi. Gerak kendaraan
+   dengan perkiraan kecepatan yang memadai tetap dapat memperoleh lokasi awal.
+4. Estimasi jarak lama menjumlahkan setiap pergeseran GPS, termasuk saat diam.
+   Tampilan rute sekarang menyaring titik buruk, deadband akurasi, lonjakan
+   sesaat yang kembali, serta memutus garis pada jeda >60 detik/lompatan tak wajar.
+   Titik mentah tetap disimpan dan koordinat terakhir tidak dipindah ke kantor.
+   Estimasi jarak bukan pengukuran odometer dan dapat berbeda dari jarak nyata.
+5. Detail peta admin/pegawai menampilkan lingkaran perkiraan akurasi terakhir
+   dan penjelasan bahwa titik di luar gedung bukan bukti tunggal keluar kantor.
+   Animasi perpindahan penanda admin dihapus agar tidak terlihat seperti gerak
+   nyata yang sebenarnya hanya interpolasi tampilan.
+6. ACK server mencakup titik diterima dan titik ditolak. Kini status keberhasilan
+   hanya memakai ACK yang tidak ditolak, termasuk duplikat yang sudah tersimpan.
+   Panel D15 membedakan waktu GPS, waktu GPS terkonfirmasi dan waktu ACK diterima;
+   mengirim antrean lama tidak membuat GPS lama tampak sebagai lokasi terkini.
+7. Check-in/out tidak lagi memakai lokasi cache lama sebagai posisi baru.
+   Waktu GPS maksimal 30 detik sebelumnya dan 5 detik ke depan diperiksa server.
+   Check-out meminta GPS baru dan tidak diam-diam memakai lokasi terakhir.
+8. Waktu GPS terverifikasi juga dipakai di status pegawai. Akurasi tidak diketahui
+   tidak diberi label Baik. Proteksi login/role/CSRF dan token API tetap dipakai.
+
+PEMERIKSAAN YANG LULUS
+- Sintaks 73 berkas PHP dalam salinan website.
+- Sintaks 21 berkas JavaScript dan 12 blok skrip template halaman PHP.
+  Untuk pemeriksaan template, ekspresi PHP diganti placeholder sintaks.
+- 20 kasus regresi Java: interval, umur GPS, mock, rentang koordinat, akurasi,
+  konfirmasi stabilitas dan akuisisi ketika bergerak.
+- 11 kasus regresi PHP rute: 369 sampel diam, jalan pelan, lonjakan kembali,
+  jeda, akurasi buruk, timestamp duplikat, koordinat/akurasi tak valid, rute kosong.
+- 7 kasus timestamp check-in/out: waktu sekarang dan penolakan waktu tidak valid.
+- Uji pilihan Kamera/Galeri PPPK bergantian pada skrip form yang tersedia.
+- Uji bridge Android: autentikasi sekali, repeated start, Bearer preflight,
+  respons 401 tetap terlihat dan mencegah layanan dimulai.
+- Gradle assembleDebug dan lintDebug berhasil untuk source terakhir.
+- Android Lint: 0 error, 4 warning: ApplySharedPref (commit token disengaja),
+  SetJavaScriptEnabled (dibutuhkan website), DataExtractionRules untuk Android
+  lama (allowBackup sudah false), dan bentuk ikon launcher.
+- Struktur APK, tanda tangan APK, versi dan fitur hasil kompilasi diperiksa.
+
+BATAS VERIFIKASI
+- Belum menjalankan alur end-to-end dengan MySQL/akun/foto di hosting pengguna.
+- Belum menguji kamera, pemilih galeri, GPS indoor/outdoor, baterai/layar terkunci,
+  swipe recent apps, atau pemasangan pada HP fisik pengguna.
+- Lulus sintaks/build bukan jaminan semua halaman bebas error runtime.
+- Tidak ada jaminan interval tepat 5 detik atau ketepatan lokasi indoor.
+- Google Maps tidak otomatis memperbaiki koordinat dari sensor HP. Peta saat ini
+  tetap menggunakan OpenStreetMap; tautan Google Maps tetap tersedia.
+
+APK
 Package: id.cikoko.pegawai.uji2
+Version: 2.3.0-uji (23)
+Minimum Android: 8.0 / API 26. Target API: 35.
+Build: debug/uji; tanda tangan berbeda dari APK unggahan pengguna.
+SHA-256: 96c5e2dc754665431a1a4c342b62b4eddc6b0955f0fa17921f1c38897cc7f0cb
 
-assembleDebug: APK berhasil dibuat.
-lintDebug: lulus; {'Warning': 4}
-Tanda tangan APK v2: valid.
-Tes kebijakan GPS: 11 kasus lulus.
-Simulasi native-sync: autentikasi sekali per halaman, konfirmasi penyimpanan token, start ulang dan penanganan HTTP 401 lulus.
-Sintaks PHP dan JS server-patch: lulus.
-
-Belum diuji pada HP fisik/emulator. Belum terbukti bertahan setelah pembersihan Recent Apps di semua merek. Belum diuji end-to-end dengan server produksi setelah perubahan ini. Target 5 detik bukan jaminan interval aktual.
-
-APK SHA256: 834edeff1207a367d1f277151be084d5468c237a4bd953d2a74a912c6edaa10c
+REFERENSI PERILAKU ANDROID
+https://developer.android.com/reference/android/webkit/WebChromeClient.FileChooserParams
+https://developer.android.com/reference/android/location/Location#getAccuracy()

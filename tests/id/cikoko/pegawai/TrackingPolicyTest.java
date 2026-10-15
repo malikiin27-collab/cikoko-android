@@ -13,6 +13,15 @@ public final class TrackingPolicyTest {
   check(!TrackingPolicy.validFix(-6.25,181,8,1000,false),"invalid longitude rejected");
   check(!TrackingPolicy.validFix(-6.25,106.85,101,1000,false),"poor accuracy rejected");
   check(!TrackingPolicy.validFix(-6.25,106.85,Float.NaN,1000,false),"invalid accuracy rejected");
-  System.out.println("PASS: 11 GPS interval/quality regression cases");
+  check(!TrackingPolicy.validFix(-6.25,106.85,31,1000,false),"31m uncertainty rejected");
+  check(!TrackingPolicy.validFix(-6.25,106.85,0,1000,false),"zero uncertainty rejected");
+  check(TrackingPolicy.validFix(-6.25,106.85,30,1000,false),"30m boundary accepted");
+  check(!TrackingPolicy.confirmed(0,0,5,5),"duplicate fix cannot confirm position");
+  check(!TrackingPolicy.confirmed(16000,0,5,5),"stale candidate cannot confirm position");
+  check(!TrackingPolicy.confirmed(5000,50,5,5),"jump cannot confirm position");
+  check(TrackingPolicy.confirmed(5000,6,5,5),"consistent second fix confirms position");
+  check(TrackingPolicy.confirmed(5000,50,5,5,10),"startup while driving can acquire a stable fix");
+  check(!TrackingPolicy.confirmed(5000,300,5,5,10),"moving speed cannot justify impossible relocation");
+  System.out.println("PASS: 20 GPS interval/quality/stability regression cases");
  }
 }

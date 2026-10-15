@@ -1,0 +1,59 @@
+(function(){'use strict';
+const root=document.createElement('div');root.className='mw-session-modal';root.hidden=true;root.innerHTML='<div class="mw-session-shade" data-session-close></div><section role="dialog" aria-modal="true" aria-labelledby="sessionTitle" tabindex="-1"><header><div><strong id="sessionTitle">Detail Sesi Jam Kerja</strong><small id="detailSubtitle"></small></div><button type="button" data-session-close aria-label="Tutup detail">✕</button></header><div class="mw-session-content" id="trackingDetailBody"></div></section>';document.body.append(root);
+let detailMap=null,previous,controller,sequence=0,leafletPromise;
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+function photoCard(title,url,emptyText){return '<div class="tracking-photo-card"><div class="tracking-photo-title">'+esc(title)+'</div>'+(url?'<a href="'+esc(url)+'"><img loading="lazy" src="'+esc(url)+'" alt="'+esc(title)+'"></a>':'<div class="tracking-photo-empty">'+esc(emptyText)+'</div>')+'</div>';}
+function loadMap(){if(window.L)return Promise.resolve();if(leafletPromise)return leafletPromise;leafletPromise=new Promise(resolve=>{const css=document.createElement('link');css.rel='stylesheet';css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';document.head.append(css);const script=document.createElement('script');script.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';script.onload=resolve;script.onerror=resolve;document.head.append(script);setTimeout(resolve,6000);});return leafletPromise;}
+function close(){sequence++;controller?.abort();if(detailMap){detailMap.remove();detailMap=null;}root.hidden=true;document.getElementById('trackingDetailBody').replaceChildren();document.body.classList.remove('mw-session-open');previous?.focus();}
+root.addEventListener('click',e=>{if(e.target.closest('[data-session-close]'))close();});
+document.addEventListener('keydown',e=>{if(root.hidden||document.body.classList.contains('mw-viewer-open'))return;if(e.key==='Escape')close();if(e.key==='Tab'){const items=[...root.querySelectorAll('button,a,summary')].filter(n=>!n.disabled&&n.getClientRects().length),first=items[0],last=items[items.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}});
+function deviceLabel(raw){const ua=String(raw||'').trim();if(!ua)return 'Tidak diketahui';const android=ua.match(/Android\s+([0-9.]+)/i);if(android){const model=ua.match(/Android\s+[0-9.]+;\s*([^;)]+)/i);let name=model?model[1].split(/\s+Build\//i)[0].trim():'';if(/^(wv|[a-z]{2}(?:[-_][a-z]{2})?)$/i.test(name))name='';return 'Android '+android[1]+(name?' · '+name.slice(0,60):'');}if(/iPad/i.test(ua))return 'iPad';if(/iPhone/i.test(ua))return 'iPhone';if(/Windows/i.test(ua))return 'Komputer Windows';if(/Macintosh|Mac OS X/i.test(ua))return 'Komputer Mac';if(/Linux/i.test(ua))return 'Komputer Linux';return 'Perangkat lainnya';}
+function renderDetail(d){
+ const body=document.getElementById('trackingDetailBody');document.getElementById('detailSubtitle').textContent=d.nama_lengkap+' · '+d.role_label+' · '+(d.nomor_pegawai||'-');
+ const distanceM=Number(d.distance_m||0);
+ const distanceText=distanceM<1000?Math.round(distanceM)+' m':(distanceM/1000).toFixed(2)+' km';
+ const routeNote='<div class="tracking-route-note"><b>Perkiraan GPS:</b> Jarak disaring berdasarkan akurasi; pergeseran kecil saat diam tidak dihitung. Garis terputus jika data tidak memadai. Lingkaran menunjukkan perkiraan ketidakpastian lokasi, bukan batas kantor. Titik di luar gedung belum membuktikan pegawai meninggalkan kantor.</div>';
+ const legacyPhotoNote=(!d.checkin_photo_url&&!d.checkout_photo_url)?'<div class="tracking-photo-legacy-note"><b>Dokumentasi foto belum tersedia.</b> Riwayat ini dibuat sebelum dokumentasi foto pemantauan tersedia. Foto hanya tersedia untuk sesi baru yang memulai sesi kerja dan Selesai Bertugas setelah pembaruan V8/V9.</div>':'';
+ body.innerHTML='<div class="tracking-detail-summary"><div><span>Status</span><b>'+esc(d.status_label)+'</b></div><div><span>Mulai Bertugas</span><b>'+esc(d.checkin_at)+'</b></div><div><span>Selesai Bertugas</span><b>'+esc(d.checkout_at||'-')+'</b></div><div><span>Durasi</span><b>'+esc(d.duration)+'</b></div><div><span>Titik GPS</span><b>'+esc(d.point_count)+' titik</b></div><div><span>Estimasi Jarak Tersaring</span><b>'+distanceText+'</b></div></div>'+
+ '<div class="tracking-detail-layout"><div><div class="tracking-detail-section-title tracking-route-heading"><span>Rute & Posisi</span><small>Titik terakhir adalah hasil GPS perangkat. Lokasi dapat bergeser, terutama di dalam gedung.</small></div><div class="tracking-map-key"><span><i class="key-in">IN</i> Mulai Bertugas</span><span><i class="key-route"></i> Jalur Perjalanan</span><span><i class="key-point"></i> Titik GPS</span><span><i class="key-out">OUT</i> Selesai Bertugas</span></div><div id="detailMap" class="map-live tracking-detail-map"></div>'+routeNote+'<div class="tracking-location-grid"><div><span>Posisi Awal Bertugas</span><b>'+Number(d.checkin_lat).toFixed(6)+', '+Number(d.checkin_lng).toFixed(6)+'</b><small>Akurasi ±'+Math.round(Number(d.checkin_accuracy||0))+' m</small><a target="_blank" rel="noopener" href="'+esc(d.checkin_maps)+'">Buka Google Maps</a></div><div><span>Posisi Akhir Bertugas</span><b>'+(d.checkout_lat==null?'-':Number(d.checkout_lat).toFixed(6)+', '+Number(d.checkout_lng).toFixed(6))+'</b><small>'+(d.checkout_accuracy==null?'Belum tersedia':'Akurasi ±'+Math.round(Number(d.checkout_accuracy))+' m')+'</small>'+(d.checkout_maps?'<a target="_blank" rel="noopener" href="'+esc(d.checkout_maps)+'">Buka Google Maps</a>':'')+'</div></div></div><div><div class="tracking-detail-section-title">Dokumentasi Foto</div>'+legacyPhotoNote+'<div class="tracking-photo-grid">'+photoCard('Foto Mulai Bertugas',d.checkin_photo_url,'Tidak ada foto mulai bertugas yang tersimpan untuk sesi ini.')+photoCard('Foto Selesai Bertugas',d.checkout_photo_url,'Tidak ada foto selesai bertugas yang tersimpan untuk sesi ini.')+'</div><div class="detail-item" style="margin-top:12px"><small>Perangkat Pengguna</small><b style="font-size:12px;line-height:1.5;overflow-wrap:anywhere">'+esc(deviceLabel(d.device_info))+'</b><small style="display:block;margin-top:8px">No. HP Pengguna</small><b style="font-size:12px;line-height:1.5;overflow-wrap:anywhere">'+esc(d.no_hp||'Belum diisi')+'</b></div></div></div>';
+ const extra=document.createElement('div');extra.className='mw-detail-extra';
+ extra.innerHTML='<details><summary>Foto laporan ('+(d.reports||[]).length+')</summary><div class="mw-detail-photos">'+(d.reports||[]).map(p=>'<a href="'+esc(p.url)+'"><img loading="lazy" src="'+esc(p.url)+'" alt="Foto laporan"><span>Periode '+(Number(p.report_slot)+1)+' · Foto '+Number(p.photo_index)+'</span><small>'+esc(p.waktu_lokasi)+'</small><small>'+esc(p.keterangan)+'</small></a>').join('')+'</div></details><details><summary>Seluruh titik GPS ('+(d.points||[]).length+')</summary><div class="mw-point-list">'+(d.points||[]).map(p=>'<a target="_blank" rel="noopener" href="https://www.google.com/maps?q='+encodeURIComponent(p.latitude+','+p.longitude)+'"><strong>'+esc(p.recorded_at)+'</strong><span>'+esc(p.latitude)+', '+esc(p.longitude)+' · ±'+Math.round(Number(p.accuracy||0))+' m</span></a>').join('')+'</div></details>';
+ body.append(extra);
+ setTimeout(()=>{
+  if(typeof L==='undefined'){document.getElementById('detailMap').textContent='Peta belum tersedia. Gunakan tautan Google Maps di bawah.';return;}
+  const el=document.getElementById('detailMap');if(!el||root.hidden)return;
+  if(detailMap){detailMap.remove();detailMap=null;}
+  detailMap=L.map(el,{zoomControl:true}).setView([d.checkin_lat,d.checkin_lng],16);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,referrerPolicy:'strict-origin-when-cross-origin',attribution:'&copy; OpenStreetMap'}).addTo(detailMap);
+  const raw=(d.points||[]).map((p,i)=>({lat:parseFloat(p.latitude),lng:parseFloat(p.longitude),accuracy:parseFloat(p.accuracy||0),time:p.recorded_at||'',index:i+1})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lng));
+  const pts=raw.map(p=>[p.lat,p.lng]);
+  const pinIcon=(type,label)=>L.divIcon({className:'tracking-route-pin-host',html:'<div class="tracking-route-pin '+type+'"><span>'+label+'</span></div>',iconSize:[42,42],iconAnchor:[21,38],popupAnchor:[0,-35]});
+  if(Number.isFinite(Number(d.checkin_lat)))pts.unshift([Number(d.checkin_lat),Number(d.checkin_lng)]);if(d.checkout_lat!=null)pts.push([Number(d.checkout_lat),Number(d.checkout_lng)]);
+  if(raw.length){
+    (d.route_segments||[]).forEach(segment=>{
+      const line=segment.map(p=>[Number(p.latitude),Number(p.longitude)]);
+      if(line.length>1){
+        L.polyline(line,{weight:7,opacity:.85,color:'#ffffff',interactive:false}).addTo(detailMap);
+        L.polyline(line,{weight:4,opacity:.9,color:'#1677ff'}).bindPopup('Estimasi lintasan GPS tersaring').addTo(detailMap);
+      }
+    });
+    const sampleStep=Math.max(1,Math.ceil(raw.length/18));
+    raw.forEach((p,i)=>{
+      if(i===0||i===raw.length-1||i%sampleStep!==0)return;
+      L.circleMarker([p.lat,p.lng],{radius:4,weight:2,color:'#ffffff',fillColor:'#1677ff',fillOpacity:1}).bindPopup('<b>Titik GPS '+p.index+'</b><br>'+esc(p.time||'-')+'<br>Akurasi ±'+Math.round(p.accuracy||0)+' m').addTo(detailMap);
+    });
+    const first={lat:Number(d.checkin_lat),lng:Number(d.checkin_lng)},last=d.checkout_lat==null?raw[raw.length-1]:{lat:Number(d.checkout_lat),lng:Number(d.checkout_lng),time:d.checkout_at};
+    L.marker([first.lat,first.lng],{icon:pinIcon('in','IN'),zIndexOffset:1000}).bindPopup('<b>CHECK-IN</b><br>'+esc(d.checkin_at)+'<br>'+first.lat.toFixed(6)+', '+first.lng.toFixed(6)).addTo(detailMap);
+    const endLabel=d.status==='closed'?'OUT':'GPS';
+    L.marker([last.lat,last.lng],{icon:pinIcon(d.status==='closed'?'out':'now',endLabel),zIndexOffset:1100}).bindPopup('<b>'+(d.status==='closed'?'CHECK-OUT':'POSISI TERAKHIR')+'</b><br>'+esc(d.status==='closed'?(d.checkout_at||last.time):(last.time||d.last_seen_at))+'<br>'+last.lat.toFixed(6)+', '+last.lng.toFixed(6)+'<br>Perkiraan akurasi '+(last.accuracy>0?'±'+Math.round(last.accuracy)+' m':'tidak tersedia')).addTo(detailMap);
+    if(pts.length>1)detailMap.fitBounds(pts,{padding:[45,45],maxZoom:17});else detailMap.setView(pts[0],18);
+  }else{
+    const ci=[Number(d.checkin_lat),Number(d.checkin_lng)];
+    if(Number.isFinite(ci[0])&&Number.isFinite(ci[1]))L.marker(ci,{icon:pinIcon('in','IN')}).addTo(detailMap);
+  }
+  detailMap.invalidateSize();
+ },100);
+}
+
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-session-detail]');if(!b)return;previous=b;controller?.abort();if(detailMap){detailMap.remove();detailMap=null;}controller=new AbortController();const request=++sequence;root.hidden=false;document.body.classList.add('mw-session-open');document.getElementById('trackingDetailBody').textContent='Memuat detail sesi…';document.getElementById('detailSubtitle').textContent='';root.querySelector('button[data-session-close]').focus();try{const r=await fetch('session_detail.php?id='+encodeURIComponent(b.dataset.sessionDetail),{credentials:'same-origin',cache:'no-store',signal:controller.signal});if(r.redirected)throw Error('Sesi login berakhir. Silakan masuk kembali.');const j=await r.json();if(!r.ok||!j.ok)throw Error(j.message||'Detail tidak dapat dimuat.');await loadMap();if(request!==sequence||root.hidden)return;renderDetail(j.session);}catch(err){if(err.name!=='AbortError'&&request===sequence)document.getElementById('trackingDetailBody').textContent=err.message||'Gagal memuat detail.';}});
+})();

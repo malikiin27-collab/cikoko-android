@@ -10,7 +10,7 @@
  const panel=document.createElement('div');
  panel.id='nativeTrackingDiagnostic';panel.className='card';
  panel.setAttribute('role','status');panel.style.cssText='padding:16px;margin:12px 0;overflow-wrap:anywhere;border:1px solid #cbd5e1';
- const heading=document.createElement('strong');heading.textContent='Status tracking Android · D14';
+ const heading=document.createElement('strong');heading.textContent='Status tracking Android · D15';
  const message=document.createElement('p');
  panel.append(heading,message);
  if(anchor)anchor.insertAdjacentElement('afterend',panel);
@@ -71,7 +71,7 @@
    try{
      await nativeAuth();if(!desiredActive)return;
      bridge.postMessage(JSON.stringify({type:'tracking',active:true}));
-     if(latestHealth)renderHealth(latestHealth);else report('Autentikasi API berhasil. Menunggu status layanan APK. Jika status tidak muncul, gunakan APK versi 2.2.0.');
+     if(latestHealth)renderHealth(latestHealth);else report('Autentikasi API berhasil. Menunggu status layanan APK. Jika status tidak muncul, gunakan APK versi 2.3.0.');
      bridge.postMessage(JSON.stringify({type:'health'}));
    }catch(e){report(e.message||'Koneksi Android gagal.',true);}
  }
@@ -82,10 +82,11 @@
    if(!h.location_enabled)warnings.push('Aktifkan GPS HP.');
    if(!h.notifications)warnings.push('Notifikasi tracking dinonaktifkan.');
    if(!h.battery_unrestricted)warnings.push('Optimasi baterai masih aktif; periksa Pengaturan tracking.');
-   const stale=desiredActive&&(!h.sent_at||Date.now()-h.sent_at>20000);
+   const confirmedFix=h.server_fix_at===undefined?h.fix_at:h.server_fix_at;
+   const stale=desiredActive&&(!h.sent_at||Date.now()-h.sent_at>20000||!confirmedFix||Date.now()-confirmedFix>20000);
    report((h.running?'Layanan GPS berjalan. ':'Layanan GPS berhenti. ')+h.message+
-     ' Lokasi terakhir: '+at(h.fix_at)+'. Pengiriman diakui server: '+at(h.sent_at)+'. '+
-     (stale?'Belum ada pengiriman baru dalam 20 detik. ':'')+warnings.join(' ')+
+     (h.accuracy?' Akurasi sampel ±'+Math.round(h.accuracy)+' m. ':'')+' Lokasi terakhir: '+at(h.fix_at)+'. Waktu GPS yang diakui server: '+at(confirmedFix)+'. Konfirmasi diterima: '+at(h.sent_at)+'. '+
+     (stale?'Belum ada lokasi baru yang terkonfirmasi dalam 20 detik. ':'')+warnings.join(' ')+
      ' Perangkat: '+h.device+' · Android '+h.android+' · APK '+h.version+'. '+h.provider+'.',desiredActive&&(!h.running||stale));
  }
  const controls=document.createElement('div');controls.style.cssText='display:flex;gap:8px;flex-wrap:wrap';
