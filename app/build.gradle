@@ -4,7 +4,7 @@ android {
  buildFeatures { buildConfig true }
  compileSdk 35
  buildToolsVersion '35.0.0'
- defaultConfig { applicationId 'id.cikoko.pegawai'; minSdk 26; targetSdk 35; versionCode 23; versionName '2.3.0'; resValue 'string', 'app_name', 'Pegawai Cikoko' }
+ defaultConfig { applicationId 'id.cikoko.pegawai'; minSdk 26; targetSdk 35; versionCode 24; versionName '2.3.1'; resValue 'string', 'app_name', 'Cikoko' }
  def signingFile = System.getenv('CI_KEYSTORE_PATH')
  signingConfigs {
   ciRelease {
@@ -16,7 +16,7 @@ android {
    }
   }
  }
- buildTypes { debug { applicationIdSuffix '.uji2'; versionNameSuffix '-uji'; resValue 'string', 'app_name', 'Cikoko Tracking Uji 2' }; release { if (signingFile) signingConfig signingConfigs.ciRelease; minifyEnabled false } }
+ buildTypes { debug { applicationIdSuffix '.uji2'; versionNameSuffix '-uji'; resValue 'string', 'app_name', 'Cikoko' }; release { if (signingFile) signingConfig signingConfigs.ciRelease; minifyEnabled false } }
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
 dependencies { implementation 'com.google.android.gms:play-services-location:21.3.0'; implementation 'androidx.core:core:1.13.1'; implementation 'androidx.webkit:webkit:1.12.1' }

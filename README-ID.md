@@ -1,3 +1,7 @@
+# Nama aplikasi: Cikoko — versi 2.3.1-uji (24)
+
+Nama debug dan release menggunakan Cikoko.
+
 # Cikoko Android 2.3.0 — GPS dan galeri PPPK
 
 Domain: https://cikoko.datawebs.my.id
