@@ -22,6 +22,9 @@ public class TrackingService extends Service {
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private FusedLocationProviderClient fused;
     private LocationCallback callback;
+    private android.location.LocationManager platformGps;
+    private android.location.LocationListener platformListener;
+    private boolean usePlatformGps;
     private PointQueue queue;
     private PowerManager.WakeLock uploadLock;
     private String token = "";
@@ -36,7 +39,15 @@ public class TrackingService extends Service {
         nm.createNotificationChannel(new NotificationChannel("tracking", "Lokasi selama bertugas", NotificationManager.IMPORTANCE_LOW));
         thread = new HandlerThread("CikokoGpsQueue"); thread.start();
         worker = new Handler(thread.getLooper()); queue = new PointQueue(this);
-        fused = LocationServices.getFusedLocationProviderClient(this);
+        usePlatformGps=com.google.android.gms.common.GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(this)!=com.google.android.gms.common.ConnectionResult.SUCCESS;
+        if(!usePlatformGps)fused = LocationServices.getFusedLocationProviderClient(this);
+        platformGps=(android.location.LocationManager)getSystemService(LOCATION_SERVICE);
+        platformListener=new android.location.LocationListener(){
+            public void onLocationChanged(Location location){capture(location);}
+            public void onStatusChanged(String provider,int status,Bundle extras){}
+            public void onProviderEnabled(String provider){}
+            public void onProviderDisabled(String provider){notice("Lokasi HP dinonaktifkan · aktifkan kembali GPS");}
+        };
         uploadLock = ((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Cikoko:GPSUpload");
         uploadLock.setReferenceCounted(false);
         callback = new LocationCallback() {
@@ -55,19 +66,20 @@ public class TrackingService extends Service {
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).build();
     }
     private void notice(String message) {
+        TrackingHealth.message=message;
         if (!running || destroyed) return;
         ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(44,notification(message));
     }
     @Override public int onStartCommand(Intent intent,int flags,int startId) {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
-            stopSelf(); return START_NOT_STICKY;
+            TrackingHealth.message="Izin lokasi akurat belum tersedia";stopSelf(); return START_NOT_STICKY;
         }
         String saved=TokenStore.read(this);
-        if (saved.isEmpty()) { stopSelf(); return START_NOT_STICKY; }
+        if (saved.isEmpty()) { TrackingHealth.message="Token aplikasi belum tersedia · buka kembali halaman kerja";stopSelf(); return START_NOT_STICKY; }
         try {
             if (Build.VERSION.SDK_INT>=29) startForeground(44,notification("Memeriksa sesi kerja dan GPS"),ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
             else startForeground(44,notification("Memeriksa sesi kerja dan GPS"));
-        } catch (SecurityException e) { stopSelf(); return START_NOT_STICKY; }
+        } catch (RuntimeException e) { TrackingHealth.message="Sistem menolak layanan: "+e.getClass().getSimpleName();stopSelf(); return START_NOT_STICKY; }
         running=true;
         boolean flush=intent!=null && "FLUSH".equals(intent.getAction());
         worker.post(()->{
@@ -88,18 +100,31 @@ public class TrackingService extends Service {
     }
     private void startGps() {
         if(gpsRequested || finishing || destroyed)return;
+        if(usePlatformGps){startPlatformGps();return;}
+        TrackingHealth.provider="Google Fused Location";
         LocationRequest request=new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,TrackingPolicy.INTERVAL_MS)
             .setMinUpdateIntervalMillis(TrackingPolicy.INTERVAL_MS).setMaxUpdateDelayMillis(0)
             .setMaxUpdateAgeMillis(0).setMinUpdateDistanceMeters(0).setWaitForAccurateLocation(true).build();
         try {
             gpsRequested=true;
             fused.requestLocationUpdates(request,callback,thread.getLooper()).addOnFailureListener(error->worker.post(()->{
-                gpsRequested=false;notice("GPS gagal dimulai · buka aplikasi dan periksa izin lokasi");
+                if(destroyed||finishing)return;gpsRequested=false;usePlatformGps=true;notice("Beralih ke GPS perangkat");startPlatformGps();
             }));
         }catch(SecurityException e){gpsRequested=false;notice("Izin lokasi dicabut · buka aplikasi");stopSelf();}
     }
+    private void startPlatformGps() {
+        if(destroyed||finishing||gpsRequested)return;
+        TrackingHealth.provider="GPS perangkat Android";
+        try {
+            if(platformGps==null||!platformGps.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)){notice("Aktifkan Lokasi/GPS pada pengaturan HP");return;}
+            platformGps.requestLocationUpdates(android.location.LocationManager.GPS_PROVIDER,TrackingPolicy.INTERVAL_MS,0,platformListener,thread.getLooper());
+            gpsRequested=true;
+        }catch(SecurityException e){notice("Izin lokasi dicabut · buka aplikasi");stopSelf();}
+        catch(RuntimeException e){gpsRequested=false;notice("GPS perangkat belum tersedia");}
+    }
     private void stopGps() {
         gpsRequested=false;
+        if(platformGps!=null && platformListener!=null)platformGps.removeUpdates(platformListener);
         if(fused!=null && callback!=null)fused.removeLocationUpdates(callback);
     }
     @SuppressWarnings("deprecation") private void capture(Location location) {
@@ -125,6 +150,7 @@ public class TrackingService extends Service {
                 .put("lat",location.getLatitude()).put("lng",location.getLongitude()).put("acc",location.getAccuracy())
                 .put("fix_epoch",location.getTime()/1000).put("speed",speed);
             if(!queue.add(point)) {notice("Antrean penuh · sambungkan internet");return;}
+            TrackingHealth.fixAt=location.getTime();
             previous=new Location(location);lastAcceptedElapsed=elapsed;
             sync(); // Fused callbacks also wake upload work while the screen is locked.
         }catch(Exception e){notice("GPS belum tersimpan · periksa ruang penyimpanan");}
@@ -171,6 +197,7 @@ public class TrackingService extends Service {
                 try {
                     JSONArray ack=response.optJSONArray("ack");if(ack==null)throw new IOException("Server belum mengakui GPS");
                     queue.ack(ack);
+                    if(ack.length()>0)TrackingHealth.sentAt=System.currentTimeMillis();
                     int rejected=response.optJSONObject("rejected")==null?0:response.optJSONObject("rejected").length();
                     notice((rejected>0?rejected+" titik ditolak · ":"")+"GPS tersimpan · antrean "+queue.size());
                     finishAttempt();
@@ -203,7 +230,7 @@ public class TrackingService extends Service {
     }
     private String tokenHash(){try{return android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8)),android.util.Base64.NO_WRAP);}catch(Exception e){throw new IllegalStateException(e);}}
     private void clearSession(){sessionId=0;validUntil=0;getSharedPreferences("tracking_state",0).edit().clear().apply();}
-    @Override public void onTaskRemoved(Intent root){notice("Tracking sesi kerja tetap aktif · layar boleh dikunci");super.onTaskRemoved(root);}
+    @Override public void onTaskRemoved(Intent root){TrackingHealth.taskRemovedAt=System.currentTimeMillis();notice("Kartu aplikasi ditutup · layanan masih berjalan saat ini");super.onTaskRemoved(root);}
     @Override public IBinder onBind(Intent intent){return null;}
     @Override public void onDestroy(){
         destroyed=true;running=false;stopGps();worker.removeCallbacksAndMessages(null);

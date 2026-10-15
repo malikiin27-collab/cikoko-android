@@ -1,15 +1,13 @@
-CIKOKO TRACKING 2.1.0 — HASIL VERIFIKASI
+Cikoko Android 2.2.0-uji / versionCode 22
+Package: id.cikoko.pegawai.uji2
 
-Build :app:assembleDebug dan :app:lintDebug: BERHASIL.
-Android lint: 0 error, 5 warning.
-Warning tersisa: penggunaan commit() pada penyimpanan token, JavaScript WebView yang diperlukan website, atribut fullBackupContent untuk Android lama (allowBackup sudah false), dan bentuk ikon launcher bawaan. Tidak dinonaktifkan dengan lint baseline.
-11 uji aturan interval/validasi GPS: LULUS.
-Uji autentikasi bridge berulang dalam halaman yang sama: LULUS (satu pertukaran token).
-Uji SQL pemilihan batch: LULUS (titik terbaru + 99 tertua, tidak duplikat).
-Parsing PHP patch pendamping dan XML Android: LULUS.
-Tanda tangan APK uji: diverifikasi apksigner (APK Signature Scheme v2).
-ID aplikasi uji: id.cikoko.pegawai.uji, versionCode 21, versionName 2.1.0-uji.
-Minimum Android 8 (API 26), target API 35.
+assembleDebug: APK berhasil dibuat.
+lintDebug: lulus; {'Warning': 4}
+Tanda tangan APK v2: valid.
+Tes kebijakan GPS: 11 kasus lulus.
+Simulasi native-sync: autentikasi sekali per halaman, konfirmasi penyimpanan token, start ulang dan penanganan HTTP 401 lulus.
+Sintaks PHP dan JS server-patch: lulus.
 
-BELUM DIUJI: perangkat fisik, layar terkunci/Doze, swipe recent apps, GPS lapangan, login akun asli, server cPanel dengan database aktif, dan keystore APK resmi. APK uji adalah hasil build untuk uji lapangan, bukan klaim semua perilaku perangkat telah lolos.
-Ikuti README-ID.md sebelum memasang dan mengganti aplikasi resmi.
+Belum diuji pada HP fisik/emulator. Belum terbukti bertahan setelah pembersihan Recent Apps di semua merek. Belum diuji end-to-end dengan server produksi setelah perubahan ini. Target 5 detik bukan jaminan interval aktual.
+
+APK SHA256: 834edeff1207a367d1f277151be084d5468c237a4bd953d2a74a912c6edaa10c
