@@ -1,0 +1,15 @@
+CIKOKO TRACKING 2.1.0 — HASIL VERIFIKASI
+
+Build :app:assembleDebug dan :app:lintDebug: BERHASIL.
+Android lint: 0 error, 5 warning.
+Warning tersisa: penggunaan commit() pada penyimpanan token, JavaScript WebView yang diperlukan website, atribut fullBackupContent untuk Android lama (allowBackup sudah false), dan bentuk ikon launcher bawaan. Tidak dinonaktifkan dengan lint baseline.
+11 uji aturan interval/validasi GPS: LULUS.
+Uji autentikasi bridge berulang dalam halaman yang sama: LULUS (satu pertukaran token).
+Uji SQL pemilihan batch: LULUS (titik terbaru + 99 tertua, tidak duplikat).
+Parsing PHP patch pendamping dan XML Android: LULUS.
+Tanda tangan APK uji: diverifikasi apksigner (APK Signature Scheme v2).
+ID aplikasi uji: id.cikoko.pegawai.uji, versionCode 21, versionName 2.1.0-uji.
+Minimum Android 8 (API 26), target API 35.
+
+BELUM DIUJI: perangkat fisik, layar terkunci/Doze, swipe recent apps, GPS lapangan, login akun asli, server cPanel dengan database aktif, dan keystore APK resmi. APK uji adalah hasil build untuk uji lapangan, bukan klaim semua perilaku perangkat telah lolos.
+Ikuti README-ID.md sebelum memasang dan mengganti aplikasi resmi.
